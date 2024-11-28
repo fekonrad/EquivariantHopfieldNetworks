@@ -1,1 +1,2 @@
-# EquivariantHopfieldNetworks
+# Equivariant Hopfield Networks
+
