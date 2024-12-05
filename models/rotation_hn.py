@@ -45,13 +45,15 @@ class RotationHopfieldNetwork2D(torch.nn.Module):
         phi_patterns = self.__inv_feature_map__(self.patterns)  # shape: (n_patterns, 3)
         logits = torch.matmul(phi_x, phi_patterns.T)  # shape: (b, n_patterns)
         
-        # Compute log-sum-exp carefully to avoid overflow
+        # Compute log-sum-exp 
         # lse(beta, x) = (1/beta) * log(sum(exp(beta * x)))
-        max_logits = torch.max(beta * logits, dim=1, keepdim=True)[0]
-        exp_term = torch.exp(beta * logits - max_logits)
-        lse = (1.0 / beta) * (max_logits + torch.log(torch.sum(exp_term, dim=1)))
+        # max_logits = torch.max(beta * logits, dim=1)[0]
+        # exp_term = torch.exp(beta * logits - max_logits)
+        # lse = (1.0 / beta) * (max_logits + torch.log(torch.sum(exp_term, dim=1)))
+        exp_term = torch.exp(beta * logits)
+        lse = (1.0 / beta) * torch.log(torch.sum(exp_term, dim=1))
         
-        # Compute L2 regularization term |phi(x)|^2/2
+        # Compute L2 regularization term |x|^2/2
         l2_term = 0.5 * torch.sum(phi_x**2, dim=1)
         
         # Return negative lse plus L2 term
@@ -65,14 +67,17 @@ class RotationHopfieldNetwork2D(torch.nn.Module):
         x = x.detach().clone()
         x.requires_grad = True
         
+        lr = 0.01
+        beta = 1.0
+        
         for _ in range(max_iter): 
             # Compute energy
-            energy = self.__energy__(x, beta=0.01)
+            energy = self.__energy__(x, beta=beta)
             energy.sum().backward()
-            
-            # Gradient descent step
+                            
+            # Gradient descent step 
             with torch.no_grad():
-                x_new = x - 0.01 * x.grad
+                x_new = x - lr * x.grad
                 
                 # Update only the specified subset of the state
                 x_new = torch.where(mask, x_new, x)
@@ -86,6 +91,63 @@ class RotationHopfieldNetwork2D(torch.nn.Module):
                 x.requires_grad = True
                 
         return x
+
+
+def plot_energy_fct():
+    import numpy as np 
+    import matplotlib.pyplot as plt 
+    # Create a simple pattern for visualization
+    patterns = torch.tensor([[1.0, 0.0]])  # single pattern at (1,0)
+    model = RotationHopfieldNetwork2D(patterns)
+    
+    # Create a grid of points
+    x = np.linspace(-1.5, 1.5, 100)
+    y = np.linspace(-1.5, 1.5, 100)
+    X, Y = np.meshgrid(x, y)
+    
+    # Convert grid points to torch tensor
+    points = torch.tensor(np.stack([X.flatten(), Y.flatten()], axis=1), dtype=torch.float32)
+    
+    # Compute energy at each point
+    with torch.no_grad():
+        energies = model.__energy__(points, beta=1.0)
+    energies = energies.numpy().reshape(X.shape)
+    
+    # Create figure with both plots side by side
+    fig = plt.figure(figsize=(15, 6))
+    
+    # 2D Contour Plot
+    levels = np.concatenate([
+            -np.logspace(0.1, -1, 100),        # negative values 
+            [0],                              # zero
+            np.logspace(-1, 0.1, 10)          # positive values 
+        ])    
+    ax1 = fig.add_subplot(121)
+    contour = ax1.contour(X, Y, energies, levels=levels)
+    ax1.clabel(contour, inline=True, fontsize=8)
+    ax1.set_title('Energy Function Contour Plot')
+    ax1.set_xlabel('x₁')
+    ax1.set_ylabel('x₂')
+    ax1.grid(True)
+    # Add pattern point
+    ax1.scatter([1], [0], color='red', marker='*', s=100, label='Pattern')
+    ax1.legend()
+    
+    # 3D Surface Plot
+    ax2 = fig.add_subplot(122, projection='3d')
+    surface = ax2.plot_surface(X, Y, energies, cmap='viridis', alpha=0.8)
+    # ax2.set_zlim(-20, 50)
+    ax2.set_title('Energy Function Surface Plot')
+    ax2.set_xlabel('x₁')
+    ax2.set_ylabel('x₂')
+    ax2.set_zlabel('Energy')
+    # Add colorbar
+    fig.colorbar(surface, ax=ax2, shrink=0.5, aspect=5)
+    
+    plt.tight_layout()
+    plt.savefig('energy_fct_C4.png', dpi=300)
+    plt.show()
+
 
 if __name__ == "__main__": 
     """
@@ -102,7 +164,4 @@ if __name__ == "__main__":
     print(f"Inputs: \n {x.numpy()}")
     print(f"Output (rounded): \n {rotation_hn(x).detach().clone().round().numpy()}")
 
-    # Problem: Seems to diverge! 
-    # But at least the "direction" of the diverging states is correct! 
-    # And equivariance of the updates does seem to hold!
-
+    plot_energy_fct()
