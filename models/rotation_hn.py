@@ -9,13 +9,20 @@ class RotationHopfieldNetwork2D(torch.nn.Module):
         without it needing to see each rotated version individually! 
         We do so by augmenting the input with a feature map that is invariant with respect to rotations. 
     """
-    def __init__(self, patterns: torch.Tensor): 
+    def __init__(self,
+                 patterns: torch.Tensor, 
+                 temperature: float = 1.0, 
+                 lr: float = 0.01): 
         """
             Args: 
                 num_patterns: Number of patterns to learn. 
+                temperature: Temperature parameter for log-sum-exp.
+                lr: Learning rate for energy gradient descent.
         """
         super().__init__()
         self.patterns = patterns
+        self.temperature = temperature
+        self.lr = lr
 
     def __inv_feature_map__(self, x: torch.Tensor): 
         # Ensure x is of shape (b, 2)
@@ -30,14 +37,15 @@ class RotationHopfieldNetwork2D(torch.nn.Module):
         return torch.stack((feature1, feature2, feature3), dim=1)
     
     
-    def __energy__(self, x: torch.Tensor, beta: float = 1.0): 
+    def __energy__(self, x: torch.Tensor): 
         """
         Compute energy E(x) = -lse(beta, phi(p)^T phi(x)) + |x|^2/2
         
         Args:
             x: Input tensor of shape (b, 2)
-            beta: Temperature parameter for log-sum-exp
         """
+        beta = self.temperature
+
         # Compute feature map phi(x)
         phi_x = self.__inv_feature_map__(x)  # shape: (b, 3)
         
@@ -46,10 +54,6 @@ class RotationHopfieldNetwork2D(torch.nn.Module):
         logits = torch.matmul(phi_x, phi_patterns.T)  # shape: (b, n_patterns)
         
         # Compute log-sum-exp 
-        # lse(beta, x) = (1/beta) * log(sum(exp(beta * x)))
-        # max_logits = torch.max(beta * logits, dim=1)[0]
-        # exp_term = torch.exp(beta * logits - max_logits)
-        # lse = (1.0 / beta) * (max_logits + torch.log(torch.sum(exp_term, dim=1)))
         exp_term = torch.exp(beta * logits)
         lse = (1.0 / beta) * torch.log(torch.sum(exp_term, dim=1))
         
@@ -59,7 +63,10 @@ class RotationHopfieldNetwork2D(torch.nn.Module):
         # Return negative lse plus L2 term
         return -lse + l2_term
 
-    def forward(self, x: torch.Tensor, max_iter: int = 1000, tol: float = 1e-6, mask: torch.Tensor = None): 
+    def forward(self, x: torch.Tensor, 
+                max_iter: int = 1000, 
+                tol: float = 1e-6, 
+                mask: torch.Tensor = None): 
         # Initialize mask if not provided - In this case no part of input is masked.
         if mask is None:
             mask = torch.ones_like(x, dtype=torch.bool)
@@ -67,12 +74,11 @@ class RotationHopfieldNetwork2D(torch.nn.Module):
         x = x.detach().clone()
         x.requires_grad = True
         
-        lr = 0.01
-        beta = 1.0
+        lr = self.lr
         
         for _ in range(max_iter): 
             # Compute energy
-            energy = self.__energy__(x, beta=beta)
+            energy = self.__energy__(x)
             energy.sum().backward()
                             
             # Gradient descent step 
@@ -98,7 +104,7 @@ def plot_energy_fct():
     import matplotlib.pyplot as plt 
     # Create a simple pattern for visualization
     patterns = torch.tensor([[1.0, 0.0]])  # single pattern at (1,0)
-    model = RotationHopfieldNetwork2D(patterns)
+    model = RotationHopfieldNetwork2D(patterns, temperature=1.0, lr=0.01)
     
     # Create a grid of points
     x = np.linspace(-1.5, 1.5, 100)
@@ -110,7 +116,7 @@ def plot_energy_fct():
     
     # Compute energy at each point
     with torch.no_grad():
-        energies = model.__energy__(points, beta=1.0)
+        energies = model.__energy__(points)
     energies = energies.numpy().reshape(X.shape)
     
     # Create figure with both plots side by side
